@@ -139,7 +139,7 @@
       .upload-area {
         border: 2px dashed #8b9c7d;
         border-radius: 14px;
-        padding: 35px 15px;
+        padding: 30px 15px;
         text-align: center;
         background: #143529;
       }
@@ -168,11 +168,29 @@
         cursor: pointer;
       }
 
-      .selected-files {
+      /* Preview Grid ก่อนอัปโหลด */
+      .preview-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        justify-content: center;
         margin-top: 15px;
-        color: #e9c77b;
-        font-size: 14px;
-        overflow-wrap: anywhere;
+      }
+
+      .preview-item {
+        width: 75px;
+        height: 75px;
+        border-radius: 8px;
+        overflow: hidden;
+        border: 1px solid #8b9c7d;
+        position: relative;
+        background: #000;
+      }
+
+      .preview-item img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
       }
 
       .status {
@@ -180,6 +198,15 @@
         font-size: 14px;
         line-height: 1.6;
         overflow-wrap: anywhere;
+      }
+
+      .gallery-actions {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 15px;
+        flex-wrap: wrap;
+        gap: 10px;
       }
 
       .gallery-grid {
@@ -193,6 +220,23 @@
         border: 1px solid #526c55;
         border-radius: 12px;
         overflow: hidden;
+        position: relative;
+      }
+
+      .photo-card.selected {
+        border-color: #d7b66d;
+        box-shadow: 0 0 10px #d7b66d55;
+      }
+
+      /* Checkbox สำหรับเลือกรูป */
+      .photo-checkbox {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        width: 20px;
+        height: 20px;
+        cursor: pointer;
+        z-index: 5;
       }
 
       .photo-card img {
@@ -234,7 +278,6 @@
       .count {
         color: #e9c77b;
         font-size: 14px;
-        margin-bottom: 18px;
       }
     </style>
   </head>
@@ -291,13 +334,12 @@
         <div class="panel">
           <h2>📸 เพิ่มรูปภาพ</h2>
           <p class="subtitle">
-            เลือกรูปภาพจากอุปกรณ์ของคุณเพื่อเพิ่มลงในแกลเลอรี
+            เลือกรูปภาพจากอุปกรณ์ของคุณ (พรีวิวก่อนอัปโหลดได้)
           </p>
 
           <div class="upload-area">
             <div class="upload-icon">🖼️</div>
-
-            <p>เลือกรูปภาพที่ต้องการเพิ่ม</p>
+            <p id="uploadText">เลือกรูปภาพที่ต้องการเพิ่ม</p>
 
             <label for="photoInput" class="file-label"> + เลือกรูปภาพ </label>
 
@@ -309,9 +351,8 @@
               multiple
             />
 
-            <div class="selected-files" id="selectedFiles">
-              ยังไม่ได้เลือกรูปภาพ
-            </div>
+            <!-- ส่วนแสดงพรีวิวก่อนอัปโหลด -->
+            <div class="preview-grid" id="previewGrid"></div>
           </div>
 
           <button class="primary full" id="uploadBtn" disabled>
@@ -325,7 +366,16 @@
         <div class="panel">
           <h2>🖼️ รูปภาพทั้งหมด</h2>
 
-          <div class="count" id="photoCount">กำลังโหลด...</div>
+          <div class="gallery-actions">
+            <div class="count" id="photoCount">กำลังโหลด...</div>
+            <button
+              class="danger hidden"
+              id="deleteSelectedBtn"
+              onclick="deleteSelectedPhotos()"
+            >
+              🗑️ ลบรูปที่เลือก (<span id="selectedCount">0</span>)
+            </button>
+          </div>
 
           <div class="gallery-grid" id="galleryGrid"></div>
         </div>
@@ -334,7 +384,8 @@
 
     <script>
       const SUPABASE_URL = "https://kguzadlezbkdwikbbstr.supabase.co";
-      const SUPABASE_ANON_KEY = "sb_publishable_AuczKzsEUi81Mmjmnqah0w_Pphu49bz";
+      const SUPABASE_ANON_KEY =
+        "sb_publishable_AuczKzsEUi81Mmjmnqah0w_Pphu49bz";
       const BUCKET = "gallery-photos";
 
       const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -346,12 +397,17 @@
       const loginStatus = document.getElementById("loginStatus");
 
       const photoInput = document.getElementById("photoInput");
-      const selectedFiles = document.getElementById("selectedFiles");
+      const previewGrid = document.getElementById("previewGrid");
+      const uploadText = document.getElementById("uploadText");
       const uploadBtn = document.getElementById("uploadBtn");
       const uploadStatus = document.getElementById("uploadStatus");
 
       const galleryGrid = document.getElementById("galleryGrid");
       const photoCount = document.getElementById("photoCount");
+      const deleteSelectedBtn = document.getElementById("deleteSelectedBtn");
+      const selectedCountSpan = document.getElementById("selectedCount");
+
+      let allPhotosData = [];
 
       loginForm.addEventListener("submit", async (event) => {
         event.preventDefault();
@@ -384,24 +440,50 @@
         loadGallery();
       }
 
-      document.getElementById("logoutBtn").addEventListener("click", async () => {
-        await db.auth.signOut();
-        dashboard.classList.add("hidden");
-        loginSection.classList.remove("hidden");
-        loginForm.reset();
-      });
+      document
+        .getElementById("logoutBtn")
+        .addEventListener("click", async () => {
+          await db.auth.signOut();
+          dashboard.classList.add("hidden");
+          loginSection.classList.remove("hidden");
+          loginForm.reset();
+        });
 
+      // ==================================
+      // PREVIEW FILES BEFORE UPLOAD
+      // ==================================
       photoInput.addEventListener("change", () => {
         const files = Array.from(photoInput.files || []);
+        previewGrid.innerHTML = "";
+
         if (files.length === 0) {
-          selectedFiles.textContent = "ยังไม่ได้เลือกรูปภาพ";
+          uploadText.textContent = "เลือกรูปภาพที่ต้องการเพิ่ม";
           uploadBtn.disabled = true;
           return;
         }
-        selectedFiles.textContent = "เลือกรูปภาพแล้ว " + files.length + " รูป";
+
+        uploadText.textContent = `เลือกรูปภาพแล้ว ${files.length} รูป (ดูตัวอย่างด้านล่าง)`;
         uploadBtn.disabled = false;
+
+        files.forEach((file) => {
+          if (!file.type.startsWith("image/")) return;
+
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            const div = document.createElement("div");
+            div.className = "preview-item";
+            const img = document.createElement("img");
+            img.src = e.target.result;
+            div.appendChild(img);
+            previewGrid.appendChild(div);
+          };
+          reader.readAsDataURL(file);
+        });
       });
 
+      // ==================================
+      // UPLOAD PHOTOS
+      // ==================================
       uploadBtn.addEventListener("click", async () => {
         const files = Array.from(photoInput.files || []);
         if (!files.length) return;
@@ -453,13 +535,18 @@
 
         uploadStatus.textContent = `เสร็จแล้ว! เพิ่มสำเร็จ ${success} รูป และไม่สำเร็จ ${failed} รูป`;
         photoInput.value = "";
-        selectedFiles.textContent = "ยังไม่ได้เลือกรูปภาพ";
+        previewGrid.innerHTML = "";
+        uploadText.textContent = "เลือกรูปภาพที่ต้องการเพิ่ม";
         await loadGallery();
         uploadBtn.disabled = true;
       });
 
+      // ==================================
+      // LOAD GALLERY
+      // ==================================
       async function loadGallery() {
         galleryGrid.innerHTML = '<div class="empty">กำลังโหลดรูปภาพ...</div>';
+        deleteSelectedBtn.classList.add("hidden");
 
         const { data, error } = await db
           .from("gallery_photos")
@@ -472,11 +559,13 @@
           return;
         }
 
-        photoCount.textContent = "รูปภาพทั้งหมด " + data.length + " รูป";
+        allPhotosData = data;
+        photoCount.textContent = `รูปภาพทั้งหมด ${data.length} รูป`;
         galleryGrid.innerHTML = "";
 
         if (data.length === 0) {
-          galleryGrid.innerHTML = '<div class="empty">ยังไม่มีรูปภาพในแกลเลอรี</div>';
+          galleryGrid.innerHTML =
+            '<div class="empty">ยังไม่มีรูปภาพในแกลเลอรี</div>';
           return;
         }
 
@@ -487,6 +576,21 @@
 
           const card = document.createElement("div");
           card.className = "photo-card";
+          card.dataset.id = photo.id;
+          card.dataset.path = photo.storage_path;
+
+          // Checkbox เลือกรูป
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.className = "photo-checkbox";
+          checkbox.addEventListener("change", (e) => {
+            if (e.target.checked) {
+              card.classList.add("selected");
+            } else {
+              card.classList.remove("selected");
+            }
+            updateSelectedCount();
+          });
 
           const img = document.createElement("img");
           img.src = imageData.publicUrl;
@@ -502,47 +606,86 @@
 
           const deleteBtn = document.createElement("button");
           deleteBtn.className = "danger delete-btn";
-          deleteBtn.textContent = "ลบรูปภาพ";
-
+          deleteBtn.textContent = "ลบรูปนี้";
           deleteBtn.addEventListener("click", () => {
-            deletePhoto(photo.id, photo.storage_path);
+            deleteSinglePhoto(photo.id, photo.storage_path);
           });
 
           info.appendChild(name);
           info.appendChild(deleteBtn);
+
+          card.appendChild(checkbox);
           card.appendChild(img);
           card.appendChild(info);
+
           galleryGrid.appendChild(card);
         });
       }
 
-      async function deletePhoto(id, path) {
+      function updateSelectedCount() {
+        const checkedBoxes = document.querySelectorAll(
+          ".photo-checkbox:checked",
+        );
+        const count = checkedBoxes.length;
+        selectedCountSpan.textContent = count;
+
+        if (count > 0) {
+          deleteSelectedBtn.classList.remove("hidden");
+        } else {
+          deleteSelectedBtn.classList.add("hidden");
+        }
+      }
+
+      // ==================================
+      // DELETE SINGLE PHOTO
+      // ==================================
+      async function deleteSinglePhoto(id, path) {
         if (!confirm("คุณต้องการลบรูปภาพนี้ใช่หรือไม่?")) return;
 
-        const { error: storageError } = await db.storage
-          .from(BUCKET)
-          .remove([path]);
-
-        if (storageError) {
-          alert("ลบไฟล์รูปภาพไม่สำเร็จ: " + storageError.message);
-          return;
-        }
-
-        const { error: databaseError } = await db
-          .from("gallery_photos")
-          .delete()
-          .eq("id", id);
-
-        if (databaseError) {
-          alert("ลบข้อมูลไม่สำเร็จ: " + databaseError.message);
-          return;
-        }
+        await db.storage.from(BUCKET).remove([path]);
+        await db.from("gallery_photos").delete().eq("id", id);
 
         alert("ลบรูปภาพเรียบร้อยแล้ว");
         await loadGallery();
       }
 
-      document.getElementById("refreshBtn").addEventListener("click", loadGallery);
+      // ==================================
+      // DELETE MULTIPLE PHOTOS
+      // ==================================
+      async function deleteSelectedPhotos() {
+        const checkedCards = document.querySelectorAll(".photo-card.selected");
+        if (checkedCards.length === 0) return;
+
+        if (
+          !confirm(
+            `คุณต้องการลบรูปภาพที่เลือกจำนวน ${checkedCards.length} รูปใช่หรือไม่?`,
+          )
+        )
+          return;
+
+        let pathsToRemove = [];
+        let idsToRemove = [];
+
+        checkedCards.forEach((card) => {
+          idsToRemove.push(card.dataset.id);
+          pathsToRemove.push(card.dataset.path);
+        });
+
+        // ลบออกจาก Storage
+        await db.storage.from(BUCKET).remove(pathsToRemove);
+
+        // ลบออกจาก Database
+        for (let id of idsToRemove) {
+          await db.from("gallery_photos").delete().eq("id", id);
+        }
+
+        alert("ลบรูปภาพที่เลือกเรียบร้อยแล้ว!");
+        await loadGallery();
+      }
+
+      document
+        .getElementById("refreshBtn")
+        .addEventListener("click", loadGallery);
 
       async function initialize() {
         const { data } = await db.auth.getSession();
